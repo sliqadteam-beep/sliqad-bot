@@ -1,1 +1,0 @@
-# sliqad-bot
