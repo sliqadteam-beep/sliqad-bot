@@ -1,0 +1,184 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SliqTest</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #080B12;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+header {
+    padding: 25px 8%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 28px;
+    font-weight: 800;
+}
+
+.download {
+    background: #5865F2;
+    color: white;
+    text-decoration: none;
+    padding: 13px 22px;
+    border-radius: 10px;
+    font-weight: bold;
+}
+
+.hero {
+    text-align: center;
+    padding: 90px 20px 60px;
+}
+
+.hero h1 {
+    font-size: 64px;
+    margin: 0;
+}
+
+.hero p {
+    color: #8994A8;
+    font-size: 19px;
+}
+
+section {
+    max-width: 900px;
+    margin: auto;
+    padding: 30px 20px 80px;
+}
+
+.card {
+    background: #121824;
+    border-radius: 18px;
+    padding: 25px;
+    margin-bottom: 20px;
+}
+
+h2 {
+    margin-top: 0;
+}
+
+.row {
+    display: flex;
+    justify-content: space-between;
+    padding: 14px;
+    margin: 6px 0;
+    border-radius: 10px;
+    background: #1B2638;
+}
+
+.muted {
+    color: #8994A8;
+    text-align: center;
+}
+
+footer {
+    text-align: center;
+    color: #8994A8;
+    padding: 30px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <div class="logo">SLIQTEST</div>
+    <a class="download" href="#">DOWNLOAD</a>
+</header>
+
+<div class="hero">
+    <h1>Test Your Limits.</h1>
+    <p>Challenge your speed, reaction time and clicking ability.</p>
+</div>
+
+<section>
+
+<div class="card">
+    <h2>🖱️ TOP 3 CPS</h2>
+    <div id="cps">Loading...</div>
+</div>
+
+<div class="card">
+    <h2>⚡ TOP 3 REACTION</h2>
+    <div id="reaction">Loading...</div>
+</div>
+
+<p class="muted">Results Can Take Up To 60 Seconds.</p>
+
+</section>
+
+<footer>
+    SliqTest
+</footer>
+
+<script>
+
+const API = "YOUR_SERVER_URL";
+
+async function loadLeaderboard() {
+
+    if (API === "YOUR_SERVER_URL") {
+        document.getElementById("cps").innerHTML =
+            '<span class="muted">Server not connected yet.</span>';
+
+        document.getElementById("reaction").innerHTML =
+            '<span class="muted">Server not connected yet.</span>';
+
+        return;
+    }
+
+    try {
+
+        const response =
+            await fetch(API + "/leaderboard");
+
+        const data =
+            await response.json();
+
+        document.getElementById("cps").innerHTML =
+            data.cps.map((item, index) => `
+                <div class="row">
+                    <span>${["🥇","🥈","🥉"][index]} ${item.username}</span>
+                    <strong>${Number(item.value).toFixed(2)} CPS</strong>
+                </div>
+            `).join("") || "No results yet.";
+
+        document.getElementById("reaction").innerHTML =
+            data.reaction.map((item, index) => `
+                <div class="row">
+                    <span>${["🥇","🥈","🥉"][index]} ${item.username}</span>
+                    <strong>${Math.round(item.value)} ms</strong>
+                </div>
+            `).join("") || "No results yet.";
+
+    } catch (error) {
+
+        document.getElementById("cps").textContent =
+            "Server unavailable.";
+
+        document.getElementById("reaction").textContent =
+            "Server unavailable.";
+    }
+}
+
+loadLeaderboard();
+
+setInterval(loadLeaderboard, 60000);
+
+</script>
+
+</body>
+</html>
