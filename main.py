@@ -1,4 +1,4 @@
-import customtkinter as ctk
+﻿import customtkinter as ctk
 import tkinter as tk
 import random
 import time
@@ -151,13 +151,13 @@ def get_rank():
     if points >= 9:
         return "DIAMOND", "💎"
     if points >= 7:
-        return "PLATINUM", "🏆"
+        return "PLATINUM", ""
     if points >= 5:
-        return "GOLD", "🥇"
+        return "GOLD", "1."
     if points >= 3:
-        return "SILVER", "🥈"
+        return "SILVER", "2."
 
-    return "BRONZE", "🥉"
+    return "BRONZE", "3."
 
 
 def send_result_to_server(test_type, value):
@@ -1882,3 +1882,4 @@ if __name__ == "__main__":
         print(e)
         print("================================")
         input("Press ENTER to close...")
+
