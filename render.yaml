@@ -1,0 +1,9 @@
+﻿services:
+  - type: web
+    name: sliqtest-server
+    runtime: python
+    rootDir: sliqtest-server
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT main:app
+    plan: free
+    healthCheckPath: /health

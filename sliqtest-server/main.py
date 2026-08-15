@@ -1,226 +1,246 @@
-﻿from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import sqlite3
-import hashlib
-import secrets
-import time
+﻿from flask import Flask, request, jsonify
+from flask_cors import CORS
+from pathlib import Path
+from datetime import datetime, timezone
+import json
+import threading
+import os
 
-app = FastAPI(title="SliqTest API")
+app = Flask(__name__)
+CORS(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DATA_FILE = DATA_DIR / "leaderboard.json"
 
-DB = "sliqtest.db"
+DATA_DIR.mkdir(exist_ok=True)
 
+lock = threading.Lock()
 
-def db():
-    connection = sqlite3.connect(DB)
-    connection.row_factory = sqlite3.Row
-    return connection
+DEFAULT_DATA = {
+    "cps": [],
+    "reaction": []
+}
 
 
-def init_db():
-    connection = db()
+def load_data():
+    if not DATA_FILE.exists():
+        save_data(DEFAULT_DATA)
+        return DEFAULT_DATA.copy()
 
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-    """)
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            test_type TEXT NOT NULL,
-            value REAL NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-    """)
+        if not isinstance(data, dict):
+            return DEFAULT_DATA.copy()
 
-    connection.commit()
-    connection.close()
+        data.setdefault("cps", [])
+        data.setdefault("reaction", [])
+
+        return data
+
+    except Exception:
+        return DEFAULT_DATA.copy()
 
 
-init_db()
+def save_data(data):
+    temp_file = DATA_FILE.with_suffix(".tmp")
+
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    os.replace(temp_file, DATA_FILE)
 
 
-class Account(BaseModel):
-    username: str
-    password: str
+def clean_username(username):
+    if not isinstance(username, str):
+        return "Player"
+
+    username = username.strip()
+
+    if not username:
+        return "Player"
+
+    return username[:32]
 
 
-class Result(BaseModel):
-    username: str
-    test_type: str
-    value: float
+def add_result(category, username, value):
+    username = clean_username(username)
 
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
 
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    if value <= 0:
+        return None
+
+    result = {
+        "username": username,
+        "value": round(value, 2),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    with lock:
+        data = load_data()
+
+        data[category].append(result)
+
+        # Keep server storage reasonably small.
+        # The leaderboard only needs the best results.
+        data[category] = sorted(
+            data[category],
+            key=lambda x: x["value"],
+            reverse=(category == "cps")
+        )[:1000]
+
+        save_data(data)
+
+    return result
 
 
 @app.get("/")
-def home():
-    return {
-        "name": "SliqTest API",
-        "status": "online"
-    }
+def index():
+    return jsonify({
+        "name": "SliqTest Server",
+        "status": "online",
+        "version": "1.0.0"
+    })
 
 
-@app.get("/leaderboard")
+@app.get("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "server": "SliqTest",
+        "time": datetime.now(timezone.utc).isoformat()
+    })
+
+
+@app.get("/api/leaderboard")
 def leaderboard():
-    connection = db()
+    with lock:
+        data = load_data()
 
-    cps = connection.execute("""
-        SELECT username, value
-        FROM results
-        WHERE test_type = 'cps'
-        ORDER BY value DESC
-        LIMIT 3
-    """).fetchall()
+    cps = sorted(
+        data["cps"],
+        key=lambda x: x["value"],
+        reverse=True
+    )[:3]
 
-    reaction = connection.execute("""
-        SELECT username, value
-        FROM results
-        WHERE test_type = 'reaction'
-        ORDER BY value ASC
-        LIMIT 3
-    """).fetchall()
+    reaction = sorted(
+        data["reaction"],
+        key=lambda x: x["value"]
+    )[:3]
 
-    connection.close()
-
-    return {
-        "cps": [
-            {
-                "username": row["username"],
-                "value": row["value"]
-            }
-            for row in cps
-        ],
-        "reaction": [
-            {
-                "username": row["username"],
-                "value": row["value"]
-            }
-            for row in reaction
-        ],
-        "updated": int(time.time())
-    }
+    return jsonify({
+        "cps": cps,
+        "reaction": reaction
+    })
 
 
-@app.post("/register")
-def register(account: Account):
-    username = account.username.strip()
+@app.get("/api/results")
+def results():
+    with lock:
+        data = load_data()
 
-    if len(username) < 2:
-        raise HTTPException(400, "Username is too short.")
+    return jsonify(data)
 
-    if len(account.password) < 4:
-        raise HTTPException(400, "Password is too short.")
 
-    connection = db()
+@app.post("/api/cps")
+def submit_cps():
+    body = request.get_json(silent=True) or {}
+
+    username = body.get("username", "Player")
+    value = body.get("cps")
+
+    # Client must only send valid results.
+    result = add_result("cps", username, value)
+
+    if result is None:
+        return jsonify({
+            "success": False,
+            "error": "Invalid CPS result"
+        }), 400
+
+    return jsonify({
+        "success": True,
+        "result": result
+    })
+
+
+@app.post("/api/reaction")
+def submit_reaction():
+    body = request.get_json(silent=True) or {}
+
+    username = body.get("username", "Player")
+    value = body.get("reaction_ms")
+
+    result = add_result("reaction", username, value)
+
+    if result is None:
+        return jsonify({
+            "success": False,
+            "error": "Invalid reaction result"
+        }), 400
+
+    return jsonify({
+        "success": True,
+        "result": result
+    })
+
+
+@app.post("/api/result")
+def submit_result():
+    body = request.get_json(silent=True) or {}
+
+    username = body.get("username", "Player")
+    test_type = body.get("type")
+
+    if test_type == "cps":
+        value = body.get("value")
+        result = add_result("cps", username, value)
+
+    elif test_type == "reaction":
+        value = body.get("value")
+        result = add_result("reaction", username, value)
+
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Unknown test type"
+        }), 400
+
+    if result is None:
+        return jsonify({
+            "success": False,
+            "error": "Invalid result"
+        }), 400
+
+    return jsonify({
+        "success": True,
+        "result": result
+    })
+
+
+if __name__ == "__main__":
+    print("")
+    print("========================================")
+    print(" SLIQTEST SERVER")
+    print("========================================")
+    print("Local address: http://127.0.0.1:5000")
+    print("Health check:  http://127.0.0.1:5000/health")
+    print("Leaderboard:    http://127.0.0.1:5000/api/leaderboard")
+    print("========================================")
+    print("")
 
     try:
-        connection.execute(
-            """
-            INSERT INTO users
-            (username, password_hash, created_at)
-            VALUES (?, ?, ?)
-            """,
-            (
-                username,
-                hash_password(account.password),
-                int(time.time())
-            )
-        )
+        from waitress import serve
 
-        connection.commit()
+        print("Starting with Waitress...")
+        serve(app, host="0.0.0.0", port=5000)
 
-    except sqlite3.IntegrityError:
-        connection.close()
-        raise HTTPException(409, "Username already exists.")
-
-    connection.close()
-
-    return {
-        "success": True,
-        "username": username
-    }
-
-
-@app.post("/login")
-def login(account: Account):
-    connection = db()
-
-    user = connection.execute(
-        """
-        SELECT username, password_hash
-        FROM users
-        WHERE username = ?
-        """,
-        (account.username.strip(),)
-    ).fetchone()
-
-    connection.close()
-
-    if not user:
-        raise HTTPException(401, "Invalid username or password.")
-
-    if user["password_hash"] != hash_password(account.password):
-        raise HTTPException(401, "Invalid username or password.")
-
-    token = secrets.token_urlsafe(32)
-
-    return {
-        "success": True,
-        "username": user["username"],
-        "token": token
-    }
-
-
-@app.post("/result")
-def submit_result(result: Result):
-
-    if result.test_type not in ["cps", "reaction"]:
-        raise HTTPException(400, "Invalid test type.")
-
-    if result.test_type == "cps":
-        if result.value <= 0 or result.value > 1000:
-            raise HTTPException(400, "Invalid CPS result.")
-
-    if result.test_type == "reaction":
-        if result.value <= 0 or result.value > 10000:
-            raise HTTPException(400, "Invalid reaction result.")
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO results
-        (username, test_type, value, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            result.username.strip(),
-            result.test_type,
-            result.value,
-            int(time.time())
-        )
-    )
-
-    connection.commit()
-    connection.close()
-
-    return {
-        "success": True
-    }
+    except ImportError:
+        print("Waitress unavailable. Starting Flask development server...")
+        app.run(host="0.0.0.0", port=5000)
