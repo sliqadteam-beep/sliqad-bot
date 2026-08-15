@@ -4,12 +4,18 @@ import random
 import time
 import json
 import os
+import webbrowser
+import urllib.request
+import urllib.error
+import requests
 import statistics
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 DATA_FILE = "sliqtest_data.json"
+
+SERVER_URL = "https://sliqtest-server.onrender.com"
 
 BG = "#080B12"
 SIDEBAR = "#0D111A"
@@ -63,6 +69,56 @@ def save_data():
         print("Save error:", e)
 
 
+def send_online_result(test_type, value):
+    """Send a completed result to the SliqTest server."""
+    try:
+        payload = {
+            "username": data.get("username", "Player"),
+            "type": test_type,
+            "value": value
+        }
+
+        request = urllib.request.Request(
+            SERVER_URL + "/api/result",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return response.status == 200
+
+    except Exception as e:
+        print("Online result error:", e)
+        return False
+
+
+def get_online_leaderboard():
+    """Get leaderboard data from the SliqTest server."""
+    try:
+        request = urllib.request.Request(
+            SERVER_URL + "/api/leaderboard",
+            headers={
+                "Accept": "application/json"
+            }
+        )
+
+        with urllib.request.urlopen(request, timeout=8) as response:
+            raw = response.read().decode("utf-8")
+            result = json.loads(raw)
+
+            if isinstance(result, dict):
+                return result
+
+            return {}
+
+    except Exception as e:
+        print("Online leaderboard error:", e)
+        return {}
+
+
 def get_rank():
     cps = data.get("best_cps", 0)
     reaction = data.get("best_reaction")
@@ -102,6 +158,40 @@ def get_rank():
         return "SILVER", "🥈"
 
     return "BRONZE", "🥉"
+
+
+def send_result_to_server(test_type, value):
+    """Send a valid result to the online SliqTest server."""
+
+    try:
+        if test_type == "cps":
+            response = requests.post(
+                f"{SERVER_URL}/api/cps",
+                json={
+                    "username": data.get("username", "Player"),
+                    "cps": value
+                },
+                timeout=8
+            )
+
+        elif test_type == "reaction":
+            response = requests.post(
+                f"{SERVER_URL}/api/reaction",
+                json={
+                    "username": data.get("username", "Player"),
+                    "reaction_ms": value
+                },
+                timeout=8
+            )
+
+        else:
+            return False
+
+        return response.ok
+
+    except Exception as e:
+        print("Server connection error:", e)
+        return False
 
 
 class SliqTest(ctk.CTk):
@@ -785,6 +875,9 @@ class SliqTest(ctk.CTk):
 
         save_data()
 
+        # Send result to online SliqTest server
+        online_ok = send_result_to_server("cps", cps)
+
         self.cps_status.configure(
             text="FINISHED",
             text_color=YELLOW
@@ -1013,6 +1106,12 @@ class SliqTest(ctk.CTk):
 
             save_data()
 
+            # Send result to online SliqTest server
+            online_ok = send_result_to_server(
+                "reaction",
+                milliseconds
+            )
+
             self.reaction_state = "ready"
 
             self.reaction_difficulty_menu.configure(
@@ -1234,13 +1333,17 @@ class SliqTest(ctk.CTk):
     # LEADERBOARD
     # ========================================================
 
+    # ========================================================
+    # LEADERBOARD
+    # ========================================================
+
     def show_leaderboard(self):
 
         self.clear()
 
         self.page_title(
-            "Leaderboard",
-            "Your top 3 results."
+            "Leaderboard ??",
+            "Your best recorded performances."
         )
 
         area = ctk.CTkFrame(
@@ -1254,47 +1357,20 @@ class SliqTest(ctk.CTk):
             padx=40
         )
 
-        self.leaderboard_card(
-            area,
-            "TOP 3 CPS",
-            data.get(
-                "cps_tests",
-                []
-            ),
-            "CPS",
-            True
-        )
+        # -------------------------------------------------
+        # Online leaderboard container
+        # -------------------------------------------------
 
-        self.leaderboard_card(
-            area,
-            "TOP 3 REACTION",
-            data.get(
-                "reaction_tests",
-                []
-            ),
-            "ms",
-            False
-        )
+        online_card = self.make_card(area)
 
-    def leaderboard_card(
-        self,
-        parent,
-        title,
-        values,
-        unit,
-        higher_is_better
-    ):
-
-        card = self.make_card(parent)
-
-        card.pack(
+        online_card.pack(
             fill="x",
             pady=10
         )
 
         ctk.CTkLabel(
-            card,
-            text=title,
+            online_card,
+            text="?? ONLINE LEADERBOARD",
             font=ctk.CTkFont(
                 size=22,
                 weight="bold"
@@ -1302,104 +1378,394 @@ class SliqTest(ctk.CTk):
         ).pack(
             anchor="w",
             padx=25,
-            pady=(20, 12)
+            pady=(20, 4)
         )
 
-        if not values:
-
-            ctk.CTkLabel(
-                card,
-                text="No results yet.",
-                text_color=MUTED
-            ).pack(
-                anchor="w",
-                padx=25,
-                pady=(0, 20)
-            )
-
-            return
-
-        sorted_values = sorted(
-            values,
-            reverse=higher_is_better
+        self.online_status = ctk.CTkLabel(
+            online_card,
+            text="Loading online leaderboard...",
+            text_color=MUTED,
+            font=ctk.CTkFont(size=13)
         )
 
-        medals = [
-            "1.",
-            "2.",
-            "3."
-        ]
+        self.online_status.pack(
+            anchor="w",
+            padx=25,
+            pady=(0, 10)
+        )
 
-        for index, value in enumerate(
-            sorted_values[:3]
-        ):
+        self.online_cps_frame = ctk.CTkFrame(
+            online_card,
+            fg_color="transparent"
+        )
 
-            row = ctk.CTkFrame(
-                card,
-                fg_color=(
-                    HOVER
-                    if index == 0
-                    else "transparent"
-                ),
-                corner_radius=10
+        self.online_cps_frame.pack(
+            fill="x",
+            padx=15
+        )
+
+        self.online_reaction_frame = ctk.CTkFrame(
+            online_card,
+            fg_color="transparent"
+        )
+
+        self.online_reaction_frame.pack(
+            fill="x",
+            padx=15
+        )
+
+        self.online_last_update = ctk.CTkLabel(
+            online_card,
+            text="",
+            text_color=MUTED,
+            font=ctk.CTkFont(size=11)
+        )
+
+        self.online_last_update.pack(
+            anchor="w",
+            padx=25,
+            pady=(8, 2)
+        )
+
+        ctk.CTkLabel(
+            online_card,
+            text="Results can take up to 60 seconds.",
+            text_color=MUTED,
+            font=ctk.CTkFont(size=11)
+        ).pack(
+            anchor="w",
+            padx=25,
+            pady=(0, 18)
+        )
+
+        # -------------------------------------------------
+        # Online website button
+        # -------------------------------------------------
+
+        online_row = ctk.CTkFrame(
+            area,
+            fg_color="transparent"
+        )
+
+        online_row.pack(
+            pady=(8, 10)
+        )
+
+        ctk.CTkLabel(
+            online_row,
+            text="See the full online leaderboard:",
+            text_color=MUTED,
+            font=ctk.CTkFont(size=13)
+        ).pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        ctk.CTkButton(
+            online_row,
+            text="View Online Leaderboard ?",
+            width=210,
+            height=34,
+            corner_radius=8,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            font=ctk.CTkFont(
+                size=12,
+                weight="bold"
+            ),
+            command=lambda: webbrowser.open(
+                "https://sliqadteam-beep.github.io/sliqad-bot/"
             )
+        ).pack(
+            side="left"
+        )
 
-            row.pack(
-                fill="x",
-                padx=15,
-                pady=4
+        # -------------------------------------------------
+        # Local leaderboard
+        # -------------------------------------------------
+
+        ctk.CTkLabel(
+            area,
+            text="YOUR LOCAL RESULTS",
+            font=ctk.CTkFont(
+                size=17,
+                weight="bold"
             )
+        ).pack(
+            anchor="w",
+            pady=(8, 0)
+        )
 
-            if unit == "CPS":
+        self.leaderboard_card(
+            area,
+            "??? TOP 3 CPS",
+            data.get("cps_tests", []),
+            "CPS",
+            True
+        )
 
-                result = (
-                    f"{value:.2f} CPS"
+        self.leaderboard_card(
+            area,
+            "? TOP 3 REACTION",
+            data.get("reaction_tests", []),
+            "ms",
+            False
+        )
+
+        # Load online data
+        self.load_online_leaderboard()
+
+    def load_online_leaderboard(self):
+
+        def worker():
+
+            result = get_online_leaderboard()
+
+            try:
+                self.after(
+                    0,
+                    lambda: self.display_online_leaderboard(result)
                 )
+            except Exception:
+                pass
 
-            else:
+        import threading
 
-                result = (
-                    f"{value} ms"
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
+    def display_online_leaderboard(self, result):
+
+        try:
+
+            # Clear old online entries
+            for widget in self.online_cps_frame.winfo_children():
+                widget.destroy()
+
+            for widget in self.online_reaction_frame.winfo_children():
+                widget.destroy()
+
+            if not isinstance(result, dict):
+                self.online_status.configure(
+                    text="Server unavailable. Showing the last available data.",
+                    text_color=YELLOW
                 )
+                return
+
+            cps = result.get("cps", [])
+            reaction = result.get("reaction", [])
+
+            if not isinstance(cps, list):
+                cps = []
+
+            if not isinstance(reaction, list):
+                reaction = []
+
+            # ---------------------------------------------
+            # CPS
+            # ---------------------------------------------
 
             ctk.CTkLabel(
-                row,
-                text=medals[index],
-                font=ctk.CTkFont(
-                    size=20,
-                    weight="bold"
-                )
-            ).pack(
-                side="left",
-                padx=(15, 12),
-                pady=10
-            )
-
-            ctk.CTkLabel(
-                row,
-                text=data.get(
-                    "username",
-                    "Player"
-                ),
-                font=ctk.CTkFont(
-                    size=14,
-                    weight="bold"
-                )
-            ).pack(
-                side="left"
-            )
-
-            ctk.CTkLabel(
-                row,
-                text=result,
+                self.online_cps_frame,
+                text="??? TOP 3 CPS",
                 font=ctk.CTkFont(
                     size=16,
                     weight="bold"
                 )
             ).pack(
-                side="right",
-                padx=15
+                anchor="w",
+                padx=10,
+                pady=(5, 4)
             )
+
+            medals = ["??", "??", "??"]
+
+            if cps:
+
+                for index, item in enumerate(cps[:3]):
+
+                    username = item.get(
+                        "username",
+                        "Player"
+                    )
+
+                    value = item.get(
+                        "value",
+                        0
+                    )
+
+                    row = ctk.CTkFrame(
+                        self.online_cps_frame,
+                        fg_color=HOVER if index == 0 else "transparent",
+                        corner_radius=8
+                    )
+
+                    row.pack(
+                        fill="x",
+                        pady=2
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=medals[index],
+                        font=ctk.CTkFont(size=20)
+                    ).pack(
+                        side="left",
+                        padx=(10, 10),
+                        pady=7
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=str(username),
+                        font=ctk.CTkFont(
+                            size=13,
+                            weight="bold"
+                        )
+                    ).pack(
+                        side="left"
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=f"{float(value):.2f} CPS",
+                        font=ctk.CTkFont(
+                            size=14,
+                            weight="bold"
+                        )
+                    ).pack(
+                        side="right",
+                        padx=12
+                    )
+
+            else:
+
+                ctk.CTkLabel(
+                    self.online_cps_frame,
+                    text="No online CPS results yet.",
+                    text_color=MUTED
+                ).pack(
+                    anchor="w",
+                    padx=10,
+                    pady=(0, 8)
+                )
+
+            # ---------------------------------------------
+            # Reaction
+            # ---------------------------------------------
+
+            ctk.CTkLabel(
+                self.online_reaction_frame,
+                text="? TOP 3 REACTION",
+                font=ctk.CTkFont(
+                    size=16,
+                    weight="bold"
+                )
+            ).pack(
+                anchor="w",
+                padx=10,
+                pady=(12, 4)
+            )
+
+            if reaction:
+
+                for index, item in enumerate(reaction[:3]):
+
+                    username = item.get(
+                        "username",
+                        "Player"
+                    )
+
+                    value = item.get(
+                        "value",
+                        0
+                    )
+
+                    row = ctk.CTkFrame(
+                        self.online_reaction_frame,
+                        fg_color=HOVER if index == 0 else "transparent",
+                        corner_radius=8
+                    )
+
+                    row.pack(
+                        fill="x",
+                        pady=2
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=medals[index],
+                        font=ctk.CTkFont(size=20)
+                    ).pack(
+                        side="left",
+                        padx=(10, 10),
+                        pady=7
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=str(username),
+                        font=ctk.CTkFont(
+                            size=13,
+                            weight="bold"
+                        )
+                    ).pack(
+                        side="left"
+                    )
+
+                    ctk.CTkLabel(
+                        row,
+                        text=f"{float(value):.0f} ms",
+                        font=ctk.CTkFont(
+                            size=14,
+                            weight="bold"
+                        )
+                    ).pack(
+                        side="right",
+                        padx=12
+                    )
+
+            else:
+
+                ctk.CTkLabel(
+                    self.online_reaction_frame,
+                    text="No online reaction results yet.",
+                    text_color=MUTED
+                ).pack(
+                    anchor="w",
+                    padx=10,
+                    pady=(0, 8)
+                )
+
+            self.online_status.configure(
+                text="Online leaderboard connected ?",
+                text_color=GREEN
+            )
+
+            now = time.strftime(
+                "%H:%M:%S"
+            )
+
+            self.online_last_update.configure(
+                text=f"Last leaderboard update: {now}"
+            )
+
+        except Exception as e:
+
+            print(
+                "Online leaderboard display error:",
+                e
+            )
+
+            try:
+                self.online_status.configure(
+                    text="Could not display online leaderboard.",
+                    text_color=RED
+                )
+            except Exception:
+                pass
 
     # ========================================================
     # PROFILE
